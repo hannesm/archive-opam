@@ -318,8 +318,7 @@ let opam_matches filter filename opam =
       in
       match op with
       | `Lt -> OpamVersionCompare.compare (s_filter filter) v <= 0
-      | `Leq -> OpamVersionCompare.compare (s_filter filter) v < 0
-      | `Eq -> OpamVersionCompare.compare (s_filter filter) v < 0
+      | `Leq | `Eq -> OpamVersionCompare.compare (s_filter filter) v < 0
       | _ -> false
     in
     let rec walk_formula p = function
@@ -337,17 +336,12 @@ let opam_matches filter filename opam =
       | OpamFormula.Empty -> false
       | Atom (name, cond) ->
         if OpamPackage.Name.equal ocaml_dep name then
-          let r = walk_formula p cond in
-          if not r then
-            Logs.debug (fun m -> m "%a OCaml dependency does not match %s"
-                           pp_pkg filename
-                           (OpamFormula.string_of_formula f_to_string cond));
-          r
+          walk_formula p cond
         else
           false
       | Block x -> find_dep x
       | And (a, b) -> find_dep a || find_dep b
-      | Or (a, b) -> find_dep a || find_dep b
+      | Or (a, b) -> find_dep a && find_dep b
     in
     find_dep deps
 
@@ -378,16 +372,16 @@ let jump () unavailable ocaml_lower_bound ignore_pkgs no_upper_bound
       (List.map OpamPackage.Name.of_string no_upper_bound)
   in
   let filter, default_reason =
-    match unavailable, ocaml_lower_bound, pkgs with
-    | true, None, [] -> `Unavailable, Uninstallable
-    | false, Some v, [] -> `Ocaml v, OCaml_version
-    | false, None, _ :: _ -> `Package, Uninstallable
-    | false, None, [] ->
-      failwith "neither unavailable nor lower bound nor packages specified"
-    | true, Some _, _
-    | true, _, _ :: _
-    | _, Some _, _ :: _ ->
-      failwith "only either --unavailable or --ocaml bound or --pkg allowed"
+    match unavailable, ocaml_lower_bound with
+    | true, None -> `Unavailable, Uninstallable
+    | false, Some v -> `Ocaml v, OCaml_version
+    | false, None ->
+      if pkgs = [] then
+        failwith "neither unavailable nor lower bound nor packages specified"
+      else
+        `Package, Uninstallable
+    | true, Some _ ->
+      failwith "only either --unavailable or --ocaml bound allowed"
   in
   let reason = Option.value ~default:default_reason reason in
   let ignored_pkgs = S.of_list ignore_pkgs
@@ -405,7 +399,7 @@ let jump () unavailable ocaml_lower_bound ignore_pkgs no_upper_bound
                 (String.starts_with ~prefix:"tezos" pkg_name
                  || String.starts_with ~prefix:"octez" pkg_name) then
           false, None
-        else
+        else if S.is_empty pkgs || S.mem pkg_name pkgs || S.mem pkg_version pkgs then
           let opam =
             let opam_file =
               OpamFile.make (OpamFilename.raw (Fpath.to_string path))
@@ -416,10 +410,9 @@ let jump () unavailable ocaml_lower_bound ignore_pkgs no_upper_bound
           | `Unavailable | `Ocaml _ as f ->
             opam_matches f path opam, Some opam
           | `Package ->
-            if S.mem pkg_version pkgs || S.mem pkg_name pkgs then
-              true, Some opam
-            else
-              false, None
+            true, Some opam
+        else
+          false, None
       else
         false, None
     in
