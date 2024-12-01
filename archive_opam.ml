@@ -251,9 +251,6 @@ let opam_matches filter filename opam =
         (OpamFile.OPAM.flags opam)
     in
     let r = available || avoid_version_or_deprecated in
-    (if r then
-       Logs.app (fun m -> m "%a is unavailable"
-                    Fmt.(styled (`Fg `Green) pp_pkg) filename));
     r
   | `Ocaml v ->
     (* should return true if there's an upper bound on ocaml <= v *)
@@ -293,11 +290,7 @@ let opam_matches filter filename opam =
       | Atom (name, cond) ->
         if OpamPackage.Name.equal ocaml_dep name then
           let r = walk_formula (p cond) cond in
-          if r then
-            Logs.app (fun m -> m "%a OCaml dependency matches %s"
-                         pp_pkg filename
-                         (OpamFormula.string_of_formula f_to_string cond))
-          else
+          if not r then
             Logs.debug (fun m -> m "%a OCaml dependency does not match %s"
                            pp_pkg filename
                            (OpamFormula.string_of_formula f_to_string cond));
@@ -384,13 +377,15 @@ let jump () unavailable ocaml_lower_bound ignore_pkgs no_upper_bound
       else
         false, None
     in
-    if move_it then
+    if move_it then begin
+      Logs.app (fun m -> m "%a will be moved"
+                   Fmt.(styled (`Fg `Red) pp_pkg) path);
       let opam = Option.get opam in
       let* () =
         move reason no_upper_bound archive opams git_commit dry_run opam path
       in
       Ok ()
-    else
+    end else
       Ok ()
   in
   let* r = Bos.OS.Dir.fold_contents foreach (Ok ()) pkg_dir in
