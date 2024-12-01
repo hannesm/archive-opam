@@ -6,13 +6,13 @@ upper bounds.
 
 ## Installation
 
-  opam pin add archive-opam git+https://github.com/hannesm/archive-opam.git
+    opam pin add archive-opam git+https://github.com/hannesm/archive-opam.git
 
 ## Usage
 
 For development, the set of flags are pretty useful:
 
-  archive-opam --unavailable --dry-run --no-upper-bound=ocaml --no-upper-bound=dune --no-upper-bound=odoc --ignore-tezos --color=always | less -R
+    archive-opam --unavailable --dry-run --no-upper-bound=ocaml --no-upper-bound=dune --no-upper-bound=odoc --ignore-tezos --color=always | less -R
 
 ## LICENSE
 
