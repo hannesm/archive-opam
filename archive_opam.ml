@@ -21,6 +21,13 @@ let reason_of_string = function
   | "uninstallable" -> Ok Uninstallable
   | x -> Error (`Msg ("unknown reason: " ^ x))
 
+let reason_enum = [
+  "ocaml-version", OCaml_version ;
+  "source-unavailable", Source_unavailable ;
+  "maintenance-intent", Maintenance_intent ;
+  "uninstallable", Uninstallable
+]
+
 let v_with_pos filename v =
   let pos = OpamParserTypes.FullPos.{ filename ; start = 0, 0 ; stop = 0, 0 } in
   OpamParserTypes.FullPos.{ pelem = v ; pos }
@@ -304,7 +311,7 @@ let opam_matches filter filename opam =
     find_dep deps
 
 let jump () unavailable ocaml_lower_bound ignore_pkgs no_upper_bound
-    opam_repository archive dry_run ignore_tezos =
+    opam_repository archive dry_run ignore_tezos pkgs reason =
   let ( let* ) = Result.bind in
   let pkg_dir = Fpath.(v opam_repository / "packages") in
   let* _ = Bos.OS.Dir.must_exist pkg_dir in
@@ -329,14 +336,19 @@ let jump () unavailable ocaml_lower_bound ignore_pkgs no_upper_bound
     OpamPackage.Name.Set.of_list
       (List.map OpamPackage.Name.of_string no_upper_bound)
   in
-  let filter, reason =
-    match unavailable, ocaml_lower_bound with
-    | true, None -> `Unavailable, Uninstallable
-    | false, Some v -> `Ocaml v, OCaml_version
-    | true, Some _ ->
-      failwith "only either --unavailable or --ocaml bound allowed"
-    | false, None -> failwith "neither unavailable nor lower bound specified"
+  let filter, default_reason =
+    match unavailable, ocaml_lower_bound, pkgs with
+    | true, None, [] -> `Unavailable, Uninstallable
+    | false, Some v, [] -> `Ocaml v, OCaml_version
+    | false, None, _ :: _ -> `Package, Uninstallable
+    | false, None, [] ->
+      failwith "neither unavailable nor lower bound nor packages specified"
+    | true, Some _, _
+    | true, _, _ :: _
+    | _, Some _, _ :: _ ->
+      failwith "only either --unavailable or --ocaml bound or --pkg allowed"
   in
+  let reason = Option.value ~default:default_reason reason in
   let foreach path acc =
     let* () = acc in
     let move_it, opam =
@@ -361,7 +373,14 @@ let jump () unavailable ocaml_lower_bound ignore_pkgs no_upper_bound
             in
             OpamFile.OPAM.read opam_file
           in
-          opam_matches filter path opam, Some opam
+          match filter with
+          | `Unavailable | `Ocaml _ as f ->
+            opam_matches f path opam, Some opam
+          | `Package ->
+            if List.mem pkg_with_version pkgs || List.mem pkg_name pkgs then
+              true, Some opam
+            else
+              false, None
       else
         false, None
     in
@@ -425,13 +444,24 @@ let ignore_tezos =
   let doc = "Ignore tezos and octez packages" in
   Arg.(value & flag & info ~doc ["ignore-tezos"])
 
+let pkg =
+  let doc = "Archive this package (may be package name or package.version)" in
+  Arg.(value & opt_all string [] & info ~doc ["pkg"])
+
+let reason =
+  let doc =
+    "Reason for archival (default is uninstallable). If ocaml-lower-bound is \
+     provided, ocaml-version is used by default."
+  in
+  Arg.(value & opt (some (enum reason_enum)) None & info ~doc ["reason"])
+
 let cmd =
   let info = Cmd.info "archive-opam" ~version:"%%VERSION_NUM%%"
   and term =
     Term.(term_result (const jump $ setup_log $ unavailable
                        $ ocaml_lower_bound $ ignore_pkgs $ no_upper_bound
                        $ opam_repository $ opam_repository_archive $ dry_run
-                       $ ignore_tezos))
+                       $ ignore_tezos $ pkg $ reason))
   in
   Cmd.v info term
 

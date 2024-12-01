@@ -1,4 +1,4 @@
 (executable
   (name archive_opam)
   (public_name archive-opam)
-  (libraries logs bos logs.fmt fmt.tty cmdliner fmt.cli logs.cli opam-client))
+  (libraries logs bos logs.fmt fmt.tty cmdliner fmt.cli logs.cli opam-format opam-state))
