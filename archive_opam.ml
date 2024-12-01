@@ -88,18 +88,10 @@ let opam_archive commit reason deps fpath opam =
   let commit = v_with_pos filename (OpamParserTypes.FullPos.String commit) in
   let opam = OpamFile.OPAM.add_extension opam commit_field commit in
   let reason =
-    let _, pkg_name_ver = pkg_name_and_version fpath in
-    if S.mem pkg_name_ver source_unavailable then
-      Source_unavailable
-    else
-      reason
-  in
-  let reason =
+    let open OpamParserTypes.FullPos in
+    let r = reason_to_string (reason fpath) in
     v_with_pos filename
-      (OpamParserTypes.FullPos.List
-         (v_with_pos filename
-            ([ v_with_pos filename
-                 (OpamParserTypes.FullPos.String (reason_to_string reason)) ] )))
+      (List (v_with_pos filename ([ v_with_pos filename (String r) ] )))
   in
   let opam = OpamFile.OPAM.add_extension opam reason_field reason in
   let opam = OpamFile.OPAM.with_depends deps opam in
@@ -176,7 +168,7 @@ let adapt_deps no_upper_bound opams opam =
         | None, _ ->
           Logs.err (fun m -> m "couldn't find latest for %s"
                        (OpamPackage.Name.to_string name));
-          exit 42
+          Atom (name, condition)
         | Some { OpamPackage.version = highest ; _ }, multiple_versions ->
           (* this adds the <= highest constrain to the existing depends clause.
              now, we try to be smart:
@@ -288,7 +280,7 @@ let move reason no_upper_bound archive opams git_commit dry_run opam opam_fpath 
     Ok ()
   end
 
-let opam_matches filter filename opam =
+let opam_matches filter opam =
   match filter with
   | `Unavailable ->
     (* available: flags *)
@@ -309,16 +301,14 @@ let opam_matches filter filename opam =
     let ocaml_dep = OpamPackage.Name.of_string "ocaml" in
     let deps = OpamFile.OPAM.depends opam in
     let dep_matches op filter =
-      let s_filter = function
-        | OpamTypes.FString s -> s
-        | f ->
-          Logs.warn (fun m -> m "%a received %s" pp_pkg filename
-                        (filter_to_string f));
-          "nonono"
-      in
-      match op with
-      | `Lt -> OpamVersionCompare.compare (s_filter filter) v <= 0
-      | `Leq | `Eq -> OpamVersionCompare.compare (s_filter filter) v < 0
+      match filter with
+      | OpamTypes.FString ver ->
+        begin
+          match op with
+          | `Lt -> OpamVersionCompare.compare ver v <= 0
+          | `Leq | `Eq -> OpamVersionCompare.compare ver v < 0
+          | _ -> false
+        end
       | _ -> false
     in
     let rec walk_formula p = function
@@ -383,7 +373,17 @@ let jump () unavailable ocaml_lower_bound ignore_pkgs no_upper_bound
     | true, Some _ ->
       failwith "only either --unavailable or --ocaml bound allowed"
   in
-  let reason = Option.value ~default:default_reason reason in
+  let reason =
+    match reason with
+    | None ->
+      (fun fpath ->
+         let _, pkg_name_ver = pkg_name_and_version fpath in
+         if S.mem pkg_name_ver source_unavailable then
+           Source_unavailable
+         else
+           default_reason)
+    | Some reason -> (fun _fpath -> reason)
+  in
   let ignored_pkgs = S.of_list ignore_pkgs
   and pkgs = S.of_list pkgs
   in
@@ -408,7 +408,7 @@ let jump () unavailable ocaml_lower_bound ignore_pkgs no_upper_bound
           in
           match filter with
           | `Unavailable | `Ocaml _ as f ->
-            opam_matches f path opam, Some opam
+            opam_matches f opam, Some opam
           | `Package ->
             true, Some opam
         else
