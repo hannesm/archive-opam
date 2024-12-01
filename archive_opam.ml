@@ -277,7 +277,7 @@ let move reason no_upper_bound archive opams git_commit dry_run opam opam_fpath 
       in
       Bos.OS.Cmd.(run_out cmd |> out_string)
     in
-    Logs.app (fun m -> m "%s@.@." diff);
+    Logs.debug (fun m -> m "%s@.@." diff);
     Ok ()
   end else begin
     let* _ = Bos.OS.Dir.create (Fpath.parent target) in
@@ -325,8 +325,8 @@ let opam_matches filter filename opam =
       | OpamTypes.Empty -> false
       | Atom f -> p f
       | Block formula -> walk_formula p formula
-      | And (a, b) -> walk_formula p a && walk_formula p b
-      | Or (a, b) -> walk_formula p a || walk_formula p b
+      | And (a, b) -> walk_formula p a || walk_formula p b
+      | Or (a, b) -> walk_formula p a && walk_formula p b
     in
     let p = function
       | OpamTypes.Filter _ -> false
