@@ -329,19 +329,15 @@ let opam_matches filter filename opam =
       | And (a, b) -> walk_formula p a && walk_formula p b
       | Or (a, b) -> walk_formula p a || walk_formula p b
     in
-    let p condition = function
-      | OpamTypes.Filter _ ->
-        Logs.warn (fun m -> m "%a dependency %s"
-                      pp_pkg filename
-                      (OpamFormula.string_of_formula f_to_string condition));
-        true
+    let p = function
+      | OpamTypes.Filter _ -> false
       | Constraint (op, filter) -> dep_matches op filter
     in
     let rec find_dep = function
       | OpamFormula.Empty -> false
       | Atom (name, cond) ->
         if OpamPackage.Name.equal ocaml_dep name then
-          let r = walk_formula (p cond) cond in
+          let r = walk_formula p cond in
           if not r then
             Logs.debug (fun m -> m "%a OCaml dependency does not match %s"
                            pp_pkg filename
