@@ -269,7 +269,7 @@ let move reason no_upper_bound archive opams git_commit dry_run opam opam_fpath 
       in
       Bos.OS.Cmd.(run_out cmd |> out_string)
     in
-    Logs.debug (fun m -> m "%s@.@." diff);
+    Logs.info (fun m -> m "%s@.@." diff);
     Ok ()
   end else begin
     let* _ = Bos.OS.Dir.create (Fpath.parent target) in
@@ -455,7 +455,7 @@ let ocaml_lower_bound =
 
 let ignore_pkgs =
   let doc = "Ignore this package" in
-  Arg.(value & opt_all string [] & info ~doc ["ignore"])
+  Arg.(value & opt_all string [ "arch-x86_32" ] & info ~doc ["ignore"])
 
 let no_upper_bound =
   let doc = "Do not emit an upper bound for dependencies to this package" in
