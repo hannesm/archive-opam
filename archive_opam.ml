@@ -235,7 +235,25 @@ let move reason no_upper_bound archive opams git_commit dry_run opam opam_fpath 
   let pkg_name, pkg_ver = pkg_name_and_version opam_fpath in
   let target = Fpath.(v archive / "packages" / pkg_name / pkg_ver / "opam") in
   let old_opam = OpamFile.make (OpamFilename.raw (Fpath.to_string opam_fpath)) in
-  let data = OpamFile.OPAM.to_string_with_preserved_format old_opam opam' in
+  let* format_from_string =
+    (* this adds the x-opam-repository-commit-hash-at-time-of-archiving
+       manually to the string.
+       the reasoning is that comments aren't tracked by OpamFile, and sometimes
+       the last line is: 'available: false # my important comment' -- and we
+       don't want to loose / move the '# my important comment'. if we add
+       another token/item at the end of the opam file, the comment will stay
+    *)
+    let* old_content = Bos.OS.File.read opam_fpath in
+    let not_add_nl =
+      String.get old_content (String.length old_content - 1) = '\n'
+    in
+    let tweaked_content =
+      let comm = commit_field ^ ":\n  \"" ^ git_commit ^ "\"\n" in
+      old_content ^ (if not_add_nl then "" else "\n") ^ comm
+    in
+    Ok tweaked_content
+  in
+  let data = OpamFile.OPAM.to_string_with_preserved_format ~format_from_string old_opam opam' in
   if dry_run then begin
     let* tmp = Bos.OS.File.tmp "new_opam_%s" in
     let* () = Bos.OS.File.write tmp data in
