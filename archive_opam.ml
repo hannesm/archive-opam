@@ -94,27 +94,7 @@ let opam_archive commit reason deps fpath opam =
       (List (v_with_pos filename ([ v_with_pos filename (String r) ] )))
   in
   let opam = OpamFile.OPAM.add_extension opam reason_field reason in
-  let opam = OpamFile.OPAM.with_depends deps opam in
-  (* remove potential available: false *)
-  let opam =
-    if match OpamFile.OPAM.available opam with
-      | OpamTypes.FBool b -> b = false
-      | _ -> false
-    then
-      OpamFile.OPAM.with_available (OpamTypes.FBool true) opam
-    else
-      opam
-  in
-  let opam =
-    let flags = OpamFile.OPAM.flags opam in
-    let flags = List.filter (function
-        | OpamTypes.Pkgflag_AvoidVersion | Pkgflag_Deprecated -> false
-        | _ -> true)
-        flags
-    in
-    OpamFile.OPAM.with_flags flags opam
-  in
-  opam
+  OpamFile.OPAM.with_depends deps opam
 
 let pp_pkg ppf fpath =
   let _, pkg_ver = pkg_name_and_version fpath in
