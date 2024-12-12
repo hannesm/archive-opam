@@ -229,58 +229,64 @@ let adapt_deps no_upper_bound opams opam =
 
 let move reason no_upper_bound archive opams git_commit dry_run include_diff
     opam opam_fpath =
-  let ( let* ) = Result.bind in
-  let opams = OpamPackage.keys (Lazy.force opams) in
-  let new_deps = adapt_deps no_upper_bound opams opam in
-  let opam' = opam_archive git_commit reason new_deps opam_fpath opam in
-  let pkg_name, pkg_ver = pkg_name_and_version opam_fpath in
-  let target = Fpath.(v archive / "packages" / pkg_name / pkg_ver / "opam") in
-  let old_opam = OpamFile.make (OpamFilename.raw (Fpath.to_string opam_fpath)) in
-  let* format_from_string =
-    (* this adds the x-opam-repository-commit-hash-at-time-of-archiving
-       manually to the string.
-       the reasoning is that comments aren't tracked by OpamFile, and sometimes
-       the last line is: 'available: false # my important comment' -- and we
-       don't want to loose / move the '# my important comment'. if we add
-       another token/item at the end of the opam file, the comment will stay
-    *)
-    let* old_content = Bos.OS.File.read opam_fpath in
-    let not_add_nl =
-      String.get old_content (String.length old_content - 1) = '\n'
-    in
-    let tweaked_content =
-      let comm = commit_field ^ ":\n  \"" ^ git_commit ^ "\"\n" in
-      old_content ^ (if not_add_nl then "" else "\n") ^ comm
-    in
-    Ok tweaked_content
-  in
-  let data = OpamFile.OPAM.to_string_with_preserved_format ~format_from_string old_opam opam' in
-  let* () =
-    if include_diff then begin
-      let* tmp = Bos.OS.File.tmp "new_opam_%s" in
-      let* () = Bos.OS.File.write tmp data in
-      let* diff, _ =
-        let cmd =
-          let color = match Fmt.style_renderer Fmt.stdout with
-            | `Ansi_tty -> "always"
-            | `None -> "never"
-          in
-          Bos.Cmd.(v "diff" % "-u" % ("--color=" ^ color) % p opam_fpath % p tmp)
-        in
-        Bos.OS.Cmd.(run_out cmd |> out_string)
-      in
-      Logs.info (fun m -> m "%s@.@." diff);
-      Ok ()
-    end else Ok ()
-  in
-  if not dry_run then begin
-    let* _ = Bos.OS.Dir.create (Fpath.parent target) in
-    let* () = Bos.OS.File.write target data in
-    let* () = Bos.OS.File.delete opam_fpath in
-    let* () = Bos.OS.Dir.delete (Fpath.parent opam_fpath) in
-    ignore (Bos.OS.Dir.delete (Fpath.parent (Fpath.parent opam_fpath)));
+  if not include_diff && dry_run then
     Ok ()
-  end else Ok ()
+  else
+    let ( let* ) = Result.bind in
+    let opams = OpamPackage.keys (Lazy.force opams) in
+    let new_deps = adapt_deps no_upper_bound opams opam in
+    let opam' = opam_archive git_commit reason new_deps opam_fpath opam in
+    let pkg_name, pkg_ver = pkg_name_and_version opam_fpath in
+    let target = Fpath.(v archive / "packages" / pkg_name / pkg_ver / "opam") in
+    let old_opam = OpamFile.make (OpamFilename.raw (Fpath.to_string opam_fpath)) in
+    let* format_from_string =
+      (* this adds the x-opam-repository-commit-hash-at-time-of-archiving
+         manually to the string.
+         the reasoning is that comments aren't tracked by OpamFile, and sometimes
+         the last line is: 'available: false # my important comment' -- and we
+         don't want to loose / move the '# my important comment'. if we add
+         another token/item at the end of the opam file, the comment will stay
+      *)
+      let* old_content = Bos.OS.File.read opam_fpath in
+      let not_add_nl =
+        String.get old_content (String.length old_content - 1) = '\n'
+      in
+      let tweaked_content =
+        let comm = commit_field ^ ":\n  \"" ^ git_commit ^ "\"\n" in
+        old_content ^ (if not_add_nl then "" else "\n") ^ comm
+      in
+      Ok tweaked_content
+    in
+    let data =
+      OpamFile.OPAM.to_string_with_preserved_format ~format_from_string old_opam opam'
+    in
+    let* () =
+      if include_diff then begin
+        let* tmp = Bos.OS.File.tmp "new_opam_%s" in
+        let* () = Bos.OS.File.write tmp data in
+        let* diff, _ =
+          let cmd =
+            let color = match Fmt.style_renderer Fmt.stdout with
+              | `Ansi_tty -> "always"
+              | `None -> "never"
+            in
+            Bos.Cmd.(v "diff" % "-u" % ("--color=" ^ color) % p opam_fpath % p tmp)
+          in
+          Bos.OS.Cmd.(run_out cmd |> out_string)
+        in
+        Logs.app (fun m -> m "%s@.@." diff);
+        Ok ()
+      end else Ok ()
+    in
+    if not dry_run then begin
+      let* _ = Bos.OS.Dir.create (Fpath.parent target) in
+      let* () = Bos.OS.File.write target data in
+      let* () = Bos.OS.File.delete opam_fpath in
+      let* () = Bos.OS.Dir.delete (Fpath.parent opam_fpath) in
+      ignore (Bos.OS.Dir.delete (Fpath.parent (Fpath.parent opam_fpath)));
+      Ok ()
+    end else
+      Ok ()
 
 let opam_matches filter opam =
   match filter with
@@ -338,9 +344,11 @@ let opam_matches filter opam =
     in
     find_dep deps
 
+module FS = Set.Make(Fpath)
+
 let jump () unavailable avoid_version deprecated ocaml_lower_bound ignore_pkgs
     no_upper_bound opam_repository archive dry_run ignore_tezos pkgs reason
-    include_diff =
+    include_diff summary =
   let ( let* ) = Result.bind in
   let pkg_dir = Fpath.(v opam_repository / "packages") in
   let* _ = Bos.OS.Dir.must_exist pkg_dir in
@@ -405,6 +413,7 @@ let jump () unavailable avoid_version deprecated ocaml_lower_bound ignore_pkgs
   let ignored_pkgs = S.of_list ignore_pkgs
   and pkgs = S.of_list pkgs
   in
+  let moved_files = ref FS.empty in
   let foreach path acc =
     let* () = acc in
     let move_it, opam =
@@ -437,6 +446,7 @@ let jump () unavailable avoid_version deprecated ocaml_lower_bound ignore_pkgs
     if move_it then begin
       Logs.app (fun m -> m "%a will be moved"
                    Fmt.(styled (`Fg `Red) pp_pkg) path);
+      moved_files := FS.add path !moved_files;
       let opam = Option.get opam in
       let* () =
         move reason no_upper_bound archive opams git_commit dry_run include_diff opam path
@@ -446,6 +456,25 @@ let jump () unavailable avoid_version deprecated ocaml_lower_bound ignore_pkgs
       Ok ()
   in
   let* r = Bos.OS.Dir.fold_contents foreach (Ok ()) pkg_dir in
+  if summary then begin
+    let h = Hashtbl.create 13 in
+    FS.iter (fun path ->
+        let pkg_name, vers = pkg_name_and_version path in
+        let have = Option.value ~default:S.empty (Hashtbl.find_opt h pkg_name) in
+        Hashtbl.replace h pkg_name (S.add vers have))
+      !moved_files;
+    Logs.app (fun m -> m "Summary (%u unique packages, %u total opam files):"
+                 (Hashtbl.length h) (FS.cardinal !moved_files));
+    Hashtbl.fold (fun pkg v acc -> (pkg, v) :: acc) h []
+    |> List.sort (fun (a, _) (b, _) -> String.compare a b)
+    |> List.iter (fun (pkg, vers) ->
+        let plen = String.length pkg + 1 in
+        let vers_without_pkg v =
+          String.sub v plen (String.length v - plen)
+        in
+        Logs.app (fun m -> m "- %s: %a" pkg Fmt.(list ~sep:(any ", ") string)
+                     (S.elements (S.map vers_without_pkg vers))))
+  end;
   r
 
 let setup_log style_renderer level =
@@ -507,6 +536,10 @@ let include_diff =
   let doc = "Output the diffs on the console as well" in
   Arg.(value & flag & info ~doc ["include-diff"])
 
+let summary =
+  let doc = "Output a summary on the console" in
+  Arg.(value & flag & info ~doc ["summary"])
+
 let ignore_tezos =
   let doc = "Ignore tezos and octez packages" in
   Arg.(value & flag & info ~doc ["ignore-tezos"])
@@ -529,7 +562,7 @@ let cmd =
                        $ deprecated $ ocaml_lower_bound $ ignore_pkgs
                        $ no_upper_bound $ opam_repository
                        $ opam_repository_archive $ dry_run $ ignore_tezos $ pkg
-                       $ reason $ include_diff))
+                       $ reason $ include_diff $ summary))
   in
   Cmd.v info term
 
