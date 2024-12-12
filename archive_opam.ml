@@ -40,21 +40,7 @@ let source_unavailable =
   S.of_list [
 "amf.0.1.2";
 "genet.0.6";
-"glical.0.0.1";
-"glical.0.0.2";
-"glical.0.0.3";
 "monocypher.0.1.0";
-"mpp.0.1.0";
-"mpp.0.1.1";
-"mpp.0.1.2";
-"mpp.0.1.3";
-"mpp.0.1.4";
-"mpp.0.1.5";
-"mpp.0.1.7";
-"mpp.0.1.8";
-"mpp.0.2.0";
-"mpp.0.2.1";
-"mpp.0.3.0";
 "ocamldot.1.0";
 "ocf.0.1.0";
 "ocf.0.3.0";
