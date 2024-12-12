@@ -227,7 +227,8 @@ let adapt_deps no_upper_bound opams opam =
   in
   locked_deps current_deps
 
-let move reason no_upper_bound archive opams git_commit dry_run opam opam_fpath =
+let move reason no_upper_bound archive opams git_commit dry_run include_diff
+    opam opam_fpath =
   let ( let* ) = Result.bind in
   let opams = OpamPackage.keys (Lazy.force opams) in
   let new_deps = adapt_deps no_upper_bound opams opam in
@@ -254,29 +255,32 @@ let move reason no_upper_bound archive opams git_commit dry_run opam opam_fpath 
     Ok tweaked_content
   in
   let data = OpamFile.OPAM.to_string_with_preserved_format ~format_from_string old_opam opam' in
-  if dry_run then begin
-    let* tmp = Bos.OS.File.tmp "new_opam_%s" in
-    let* () = Bos.OS.File.write tmp data in
-    let* diff, _ =
-      let cmd =
-        let color = match Fmt.style_renderer Fmt.stdout with
-          | `Ansi_tty -> "always"
-          | `None -> "never"
+  let* () =
+    if include_diff then begin
+      let* tmp = Bos.OS.File.tmp "new_opam_%s" in
+      let* () = Bos.OS.File.write tmp data in
+      let* diff, _ =
+        let cmd =
+          let color = match Fmt.style_renderer Fmt.stdout with
+            | `Ansi_tty -> "always"
+            | `None -> "never"
+          in
+          Bos.Cmd.(v "diff" % "-u" % ("--color=" ^ color) % p opam_fpath % p tmp)
         in
-        Bos.Cmd.(v "diff" % "-u" % ("--color=" ^ color) % p opam_fpath % p tmp)
+        Bos.OS.Cmd.(run_out cmd |> out_string)
       in
-      Bos.OS.Cmd.(run_out cmd |> out_string)
-    in
-    Logs.info (fun m -> m "%s@.@." diff);
-    Ok ()
-  end else begin
+      Logs.info (fun m -> m "%s@.@." diff);
+      Ok ()
+    end else Ok ()
+  in
+  if not dry_run then begin
     let* _ = Bos.OS.Dir.create (Fpath.parent target) in
     let* () = Bos.OS.File.write target data in
     let* () = Bos.OS.File.delete opam_fpath in
     let* () = Bos.OS.Dir.delete (Fpath.parent opam_fpath) in
     ignore (Bos.OS.Dir.delete (Fpath.parent (Fpath.parent opam_fpath)));
     Ok ()
-  end
+  end else Ok ()
 
 let opam_matches filter opam =
   match filter with
@@ -335,7 +339,8 @@ let opam_matches filter opam =
     find_dep deps
 
 let jump () unavailable avoid_version deprecated ocaml_lower_bound ignore_pkgs
-    no_upper_bound opam_repository archive dry_run ignore_tezos pkgs reason =
+    no_upper_bound opam_repository archive dry_run ignore_tezos pkgs reason
+    include_diff =
   let ( let* ) = Result.bind in
   let pkg_dir = Fpath.(v opam_repository / "packages") in
   let* _ = Bos.OS.Dir.must_exist pkg_dir in
@@ -434,7 +439,7 @@ let jump () unavailable avoid_version deprecated ocaml_lower_bound ignore_pkgs
                    Fmt.(styled (`Fg `Red) pp_pkg) path);
       let opam = Option.get opam in
       let* () =
-        move reason no_upper_bound archive opams git_commit dry_run opam path
+        move reason no_upper_bound archive opams git_commit dry_run include_diff opam path
       in
       Ok ()
     end else
@@ -498,6 +503,10 @@ let dry_run =
   let doc = "Do not modify anything, just print what would be done" in
   Arg.(value & flag & info ~doc ["dryrun" ; "dry-run"])
 
+let include_diff =
+  let doc = "Output the diffs on the console as well" in
+  Arg.(value & flag & info ~doc ["include-diff"])
+
 let ignore_tezos =
   let doc = "Ignore tezos and octez packages" in
   Arg.(value & flag & info ~doc ["ignore-tezos"])
@@ -520,7 +529,7 @@ let cmd =
                        $ deprecated $ ocaml_lower_bound $ ignore_pkgs
                        $ no_upper_bound $ opam_repository
                        $ opam_repository_archive $ dry_run $ ignore_tezos $ pkg
-                       $ reason))
+                       $ reason $ include_diff))
   in
   Cmd.v info term
 
