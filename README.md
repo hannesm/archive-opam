@@ -17,3 +17,7 @@ For development, the set of flags are pretty useful:
 ## LICENSE
 
 ISC
+
+## Acknowledgments
+
+A grant from the [OCaml Software Foundation](https://ocaml-sf.org/) helped to develop archive-opam.
