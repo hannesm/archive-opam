@@ -395,8 +395,8 @@ let is_installable opams opam =
           begin match matches_filter f with
             | `Bool b -> `Bool (not b)
             | `Always ->
-              Logs.warn (fun m -> m "matches_filter: not %s resulted in always" (filter_to_string f));
-              `Always
+              Logs.warn (fun m -> m "matches_filter: not %s resulted in true" (filter_to_string f));
+              `Bool true
           end
         | FDefined f ->
           Logs.warn (fun m -> m "matches_filter: defined %s" (filter_to_string f));
