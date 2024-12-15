@@ -220,66 +220,59 @@ let adapt_deps no_upper_bound opams opam =
   in
   locked_deps current_deps
 
-let move reason no_upper_bound archive opams git_commit dry_run include_diff
-    opam opam_fpath =
-  if not include_diff && dry_run then
-    Ok ()
-  else
-    let ( let* ) = Result.bind in
-    let opams = OpamPackage.keys (Lazy.force opams) in
-    let new_deps = adapt_deps no_upper_bound opams opam in
-    let opam' = opam_archive git_commit reason new_deps opam_fpath opam in
-    let pkg_name, pkg_ver = pkg_name_and_version opam_fpath in
-    let target = Fpath.(v archive / "packages" / pkg_name / pkg_ver / "opam") in
-    let old_opam = OpamFile.make (OpamFilename.raw (Fpath.to_string opam_fpath)) in
-    let* format_from_string =
-      (* this adds the x-opam-repository-commit-hash-at-time-of-archiving
-         manually to the string.
-         the reasoning is that comments aren't tracked by OpamFile, and sometimes
-         the last line is: 'available: false # my important comment' -- and we
-         don't want to loose / move the '# my important comment'. if we add
-         another token/item at the end of the opam file, the comment will stay
-      *)
-      let* old_content = Bos.OS.File.read opam_fpath in
-      let not_add_nl =
-        String.get old_content (String.length old_content - 1) = '\n'
+let adapt_opam opams no_upper_bound git_commit reason opam_fpath opam =
+  let ( let* ) = Result.bind in
+  let opams = Lazy.force opams in
+  let new_deps = adapt_deps no_upper_bound opams opam in
+  let opam' = opam_archive git_commit reason new_deps opam_fpath opam in
+  let* format_from_string =
+    (* this adds the x-opam-repository-commit-hash-at-time-of-archiving
+       manually to the string.
+       the reasoning is that comments aren't tracked by OpamFile, and sometimes
+       the last line is: 'available: false # my important comment' -- and we
+       don't want to loose / move the '# my important comment'. if we add
+       another token/item at the end of the opam file, the comment will stay
+    *)
+    let* old_content = Bos.OS.File.read opam_fpath in
+    let not_add_nl =
+      String.get old_content (String.length old_content - 1) = '\n'
+    in
+    let tweaked_content =
+      let comm = commit_field ^ ":\n  \"" ^ git_commit ^ "\"\n" in
+      old_content ^ (if not_add_nl then "" else "\n") ^ comm
+    in
+    Ok tweaked_content
+  in
+  let o = OpamFile.make (OpamFilename.raw (Fpath.to_string opam_fpath)) in
+  Ok (OpamFile.OPAM.to_string_with_preserved_format ~format_from_string o opam')
+
+let output_opam_diff opam_fpath data =
+  let ( let* ) = Result.bind in
+  let* tmp = Bos.OS.File.tmp "new_opam_%s" in
+  let* () = Bos.OS.File.write tmp data in
+  let* diff, _ =
+    let cmd =
+      let color = match Fmt.style_renderer Fmt.stdout with
+        | `Ansi_tty -> "always"
+        | `None -> "never"
       in
-      let tweaked_content =
-        let comm = commit_field ^ ":\n  \"" ^ git_commit ^ "\"\n" in
-        old_content ^ (if not_add_nl then "" else "\n") ^ comm
-      in
-      Ok tweaked_content
+      Bos.Cmd.(v "diff" % "-u" % ("--color=" ^ color) % p opam_fpath % p tmp)
     in
-    let data =
-      OpamFile.OPAM.to_string_with_preserved_format ~format_from_string old_opam opam'
-    in
-    let* () =
-      if include_diff then begin
-        let* tmp = Bos.OS.File.tmp "new_opam_%s" in
-        let* () = Bos.OS.File.write tmp data in
-        let* diff, _ =
-          let cmd =
-            let color = match Fmt.style_renderer Fmt.stdout with
-              | `Ansi_tty -> "always"
-              | `None -> "never"
-            in
-            Bos.Cmd.(v "diff" % "-u" % ("--color=" ^ color) % p opam_fpath % p tmp)
-          in
-          Bos.OS.Cmd.(run_out cmd |> out_string)
-        in
-        Logs.app (fun m -> m "%s@.@." diff);
-        Ok ()
-      end else Ok ()
-    in
-    if not dry_run then begin
-      let* _ = Bos.OS.Dir.create (Fpath.parent target) in
-      let* () = Bos.OS.File.write target data in
-      let* () = Bos.OS.File.delete opam_fpath in
-      let* () = Bos.OS.Dir.delete (Fpath.parent opam_fpath) in
-      ignore (Bos.OS.Dir.delete (Fpath.parent (Fpath.parent opam_fpath)));
-      Ok ()
-    end else
-      Ok ()
+    Bos.OS.Cmd.(run_out cmd |> out_string)
+  in
+  Logs.app (fun m -> m "%s@.@." diff);
+  Ok ()
+
+let move_opam archive opam_fpath data =
+  let ( let* ) = Result.bind in
+  let pkg_name, pkg_ver = pkg_name_and_version opam_fpath in
+  let target = Fpath.(v archive / "packages" / pkg_name / pkg_ver / "opam") in
+  let* _ = Bos.OS.Dir.create (Fpath.parent target) in
+  let* () = Bos.OS.File.write target data in
+  let* () = Bos.OS.File.delete opam_fpath in
+  let* () = Bos.OS.Dir.delete (Fpath.parent opam_fpath) in
+  ignore (Bos.OS.Dir.delete (Fpath.parent (Fpath.parent opam_fpath)));
+  Ok ()
 
 let opam_matches filter opam =
   match filter with
@@ -337,11 +330,214 @@ let opam_matches filter opam =
     in
     find_dep deps
 
+let is_installable opams opam =
+  Logs.info (fun m -> m "installable of opam %s version %s"
+               (OpamPackage.Name.to_string (OpamFile.OPAM.name opam))
+               (OpamPackage.Version.to_string (OpamFile.OPAM.version opam)));
+  let find_available name =
+    OpamPackage.Set.fold (fun pkg acc ->
+        if OpamPackage.Name.equal pkg.OpamPackage.name name then
+          (OpamPackage.Version.to_string pkg.OpamPackage.version) :: acc
+        else
+          acc) opams []
+  in
+  let current_deps = OpamFile.OPAM.depends opam in
+  let rec deps_good e = function
+    | OpamFormula.Empty -> true, e
+    | Atom (name, condition) ->
+      Logs.info (fun m -> m "deps good %s" (OpamPackage.Name.to_string name));
+      (* we've to find name in opams, and figure whether condition is satisfied *)
+      let all_available = find_available name in
+      (* esp. in conjunctions ("foo" {>= "1.0" & < "1.3"}) we need to track the
+         matching candidates across the "&" - otherwise we may select "2.0" for
+         the first conjunct, and 0.3 for the second. That's why we use a
+         reference cell here. *)
+      let available = ref all_available in
+      let relop_cmp x = function
+        | `Eq -> x = 0
+        | `Geq -> x >= 0
+        | `Gt -> x > 0
+        | `Leq -> x <= 0
+        | `Lt -> x < 0
+        | `Neq -> x <> 0
+      in
+      let combine_f op a b = match a, b with
+        | `Bool a, `Bool b -> `Bool (op a b)
+        | `Always, _ | _, `Always -> `Always
+      in
+      let rec matches_filter = function
+        | OpamTypes.FBool b -> `Bool b
+        | FString s ->
+          Logs.warn (fun m -> m "matches_filter: string %s" s);
+          `Bool true
+        | FIdent (_opt_names, var, _env) ->
+          begin match OpamVariable.to_string var with
+            | "dev" | "with-doc" | "with-test" | "with-dev-setup" -> `Always
+            | "build" | "post" -> `Bool true
+            | _ ->
+              Logs.warn (fun m -> m "matches_filter: ident %s" (OpamVariable.to_string var));
+              `Bool true
+          end
+        | FOp (f, rel, g) ->
+          begin match f with
+            | FIdent (_, var, _) when OpamVariable.to_string var = "os" ->
+              `Bool true
+            | _ ->
+              Logs.warn (fun m -> m "matches_filter: %s %s %s" (filter_to_string f)
+                            (string_of_relop rel) (filter_to_string g));
+              `Bool true
+          end
+        | FAnd (f, g) ->
+          combine_f ( && ) (matches_filter f) (matches_filter g)
+        | FOr (f, g) ->
+          combine_f ( || ) (matches_filter f) (matches_filter g)
+        | FNot f ->
+          begin match matches_filter f with
+            | `Bool b -> `Bool (not b)
+            | `Always ->
+              Logs.warn (fun m -> m "matches_filter: not %s resulted in always" (filter_to_string f));
+              `Always
+          end
+        | FDefined f ->
+          Logs.warn (fun m -> m "matches_filter: defined %s" (filter_to_string f));
+          `Bool true
+        | FUndef f ->
+          Logs.warn (fun m -> m "matches_filter: undefined %s" (filter_to_string f));
+          `Bool true
+      in
+      let rec matches_condition = function
+        | OpamTypes.Empty ->
+          Logs.debug (fun m -> m "matches_condition: empty");
+          `Bool true
+        | Atom (OpamTypes.Filter f) ->
+          Logs.debug (fun m -> m "matches_condition: filter %s" (filter_to_string f));
+          matches_filter f
+        | Atom (Constraint (relop, f)) ->
+          Logs.debug (fun m -> m "matches_condition: constraint %s %s"
+                        (string_of_relop relop)
+                        (filter_to_string f));
+          let r =
+            let v =
+              match f with
+              | OpamTypes.FString s -> Some s
+              | FIdent (_opt_names, var, _env) when OpamVariable.to_string var = "version" ->
+                Some (OpamPackage.Version.to_string (OpamFile.OPAM.version opam))
+              | _ -> None
+            in
+            match v with
+            | None ->
+              Logs.warn (fun m -> m "matches_condition: unexpected filter %s"
+                            (filter_to_string f));
+              true
+            | Some v ->
+              available :=
+                List.filter (fun ver ->
+                    let r = relop_cmp (OpamVersionCompare.compare ver v) relop in
+                    Logs.debug (fun m -> m "%s %s %s = %B" ver (string_of_relop relop) v r);
+                    r)
+                  !available;
+              !available <> []
+          in
+          Logs.debug (fun m -> m "matches_condition result %B" r);
+          `Bool r
+        | Block a ->
+          Logs.debug (fun m -> m "matches_condition: block");
+          matches_condition a
+        | And (a, b) ->
+          Logs.debug (fun m -> m "matches_condition: and");
+          let a = matches_condition a in
+          let b = matches_condition b in
+          Logs.debug (fun m -> m "matches_condition: and - combining %s with %s"
+                         (match a with `Bool true -> "bool true" | `Bool false -> "bool false" | `Always -> "always")
+                         (match b with `Bool true -> "bool true" | `Bool false -> "bool false" | `Always -> "always"));
+          let r = combine_f ( && ) a b in
+          Logs.debug (fun m -> m "matches_condition: and result %s"
+                         (match r with `Bool true -> "bool true" | `Bool false -> "bool false" | `Always -> "always"));
+          r
+        | Or (a, b) ->
+          Logs.debug (fun m -> m "matches_condition: or");
+          let a = matches_condition a in
+          available := all_available;
+          let b = matches_condition b in
+          available := all_available;
+          combine_f ( || ) a b
+      in
+      let r =
+        match matches_condition condition with
+        | `Bool b -> b && !available <> []
+        | `Always -> true
+      in
+      let e =
+        if not r then begin
+          let cond = condition_to_string condition in
+          let pkg_name =
+            OpamPackage.Name.to_string (OpamFile.OPAM.name opam) ^ "." ^
+            OpamPackage.Version.to_string (OpamFile.OPAM.version opam)
+          in
+          let reason =
+            "\"" ^ OpamPackage.Name.to_string name ^ "\"" ^
+            (if cond = "" then "" else " { " ^ cond ^ " }")
+          in
+          Some (pkg_name, reason)
+        end else
+          e
+      in
+      r, e
+    | Block x -> deps_good e x
+    | And (a, b) ->
+      let a', ea = deps_good e a in
+      let b', eb = deps_good ea b in
+      a' && b', eb
+    | Or (a, b) ->
+      let a', ea = deps_good e a in
+      let b', eb = deps_good ea b in
+      a' || b', eb
+  in
+  deps_good None current_deps
+
 module FS = Set.Make(Fpath)
 
+let filter_and_reason ~avoid_version ~deprecated ~unavailable ~ocaml_lower_bound
+    ~installable ~pkg_all pkgs =
+  let flags =
+    (if avoid_version then
+       [ OpamTypes.Pkgflag_AvoidVersion ]
+     else []) @
+    (if deprecated then
+       [ OpamTypes.Pkgflag_Deprecated ]
+     else
+       [])
+  in
+  let unav = match unavailable, flags with
+    | false, [] -> None
+    | b, flags -> Some (b, flags)
+  in
+  match unav, ocaml_lower_bound with
+  | Some x, None ->
+    if installable then
+      invalid_arg "only either --unavailable or --installable can be provided"
+    else
+      `Unavailable x, Uninstallable
+  | None, Some v ->
+    if installable then
+      invalid_arg "only either --unavailable or --ocaml can be provided"
+    else
+      `Ocaml v, OCaml_version
+  | None, None ->
+    if S.is_empty pkgs && not pkg_all then
+      invalid_arg "one of --unavailable, --ocaml, --pkg/--pkg-file/--pkg-all \
+                must be specified"
+    else if installable then
+      `Installable, Uninstallable
+    else
+      `Package, Uninstallable
+  | Some _, Some _ ->
+    failwith "only either --unavailable (--avoid-version / --deprecated) \
+              or --ocaml bound allowed"
+
 let jump () unavailable avoid_version deprecated ocaml_lower_bound ignore_pkgs
-    no_upper_bound opam_repository archive dry_run ignore_tezos pkgs reason
-    include_diff summary =
+    no_upper_bound opam_repository archive dry_run ignore_tezos pkgs user_reason
+    include_diff no_summary installable pkg_file pkg_all later_installable =
   let ( let* ) = Result.bind in
   let pkg_dir = Fpath.(v opam_repository / "packages") in
   let* _ = Bos.OS.Dir.must_exist pkg_dir in
@@ -356,44 +552,41 @@ let jump () unavailable avoid_version deprecated ocaml_lower_bound ignore_pkgs
       let* _ = Bos.OS.Dir.must_exist (Fpath.v archive) in
       Ok ()
   in
+  let ignored_pkgs = S.of_list ignore_pkgs in
+  let* pkgs = match pkgs, pkg_file with
+    | [], None -> Ok S.empty
+    | _ :: _, None -> Ok (S.of_list pkgs)
+    | [], Some f ->
+      let* data = Bos.OS.File.read (Fpath.v f) in
+      let pkgs =
+        String.split_on_char '\n' data |>
+        String.concat "" |>
+        String.split_on_char ' ' |>
+        List.filter (fun s -> s <> "") |>
+        S.of_list
+      in
+      Ok pkgs
+    | _, Some _ ->
+      failwith "only --pkg or --pkg-file allowed"
+  in
+  if later_installable && S.is_empty pkgs && not pkg_all then
+    invalid_arg "--later-installable present, but no --pkg/--pkg-file/--pkg-all";
   let opams =
     lazy
-      (OpamRepositoryState.load_opams_from_dir
-         (OpamRepositoryName.of_string "temporary")
-         (OpamFilename.Dir.of_string opam_repository))
+      (OpamPackage.keys
+         (OpamRepositoryState.load_opams_from_dir
+            (OpamRepositoryName.of_string "temporary")
+            (OpamFilename.Dir.of_string opam_repository)))
   in
   let no_upper_bound =
     OpamPackage.Name.Set.of_list
       (List.map OpamPackage.Name.of_string no_upper_bound)
   in
   let filter, default_reason =
-    let flags =
-      (if avoid_version then
-         [ OpamTypes.Pkgflag_AvoidVersion ]
-       else []) @
-      (if deprecated then
-         [ OpamTypes.Pkgflag_Deprecated ]
-       else
-         [])
-    in
-    let unav = match unavailable, flags with
-      | false, [] -> None
-      | b, flags -> Some (`Unavailable (b, flags))
-    in
-    match unav, ocaml_lower_bound with
-    | Some x, None -> x, Uninstallable
-    | None, Some v -> `Ocaml v, OCaml_version
-    | None, None ->
-      if pkgs = [] then
-        failwith "neither unavailable nor lower bound nor packages specified"
-      else
-        `Package, Uninstallable
-    | Some _, Some _ ->
-      failwith "only either --unavailable (--avoid-version / --deprecarted) \
-                or --ocaml bound allowed"
+    filter_and_reason ~avoid_version ~deprecated ~unavailable ~ocaml_lower_bound
+      ~installable ~pkg_all pkgs
   in
-  let reason =
-    match reason with
+  let reason = match user_reason with
     | None ->
       (fun fpath ->
          let _, pkg_name_ver = pkg_name_and_version fpath in
@@ -403,58 +596,139 @@ let jump () unavailable avoid_version deprecated ocaml_lower_bound ignore_pkgs
            default_reason)
     | Some reason -> (fun _fpath -> reason)
   in
-  let ignored_pkgs = S.of_list ignore_pkgs
-  and pkgs = S.of_list pkgs
-  in
+  (* keeping a set of opam files we moved, important for printing a summary,
+     but also for dry_run (and bookkeeping in "opams" and "pkgs") to avoid
+     considering an opam file we already deleted. *)
   let moved_files = ref FS.empty in
-  let foreach path acc =
-    let* () = acc in
-    let move_it, opam =
-      if Fpath.filename path = "opam" then
-        let pkg_name, pkg_version = pkg_name_and_version path in
-        if S.mem pkg_version ignored_pkgs || S.mem pkg_name ignored_pkgs then
-          (Logs.info (fun m -> m "ignoring %a (--ignore)" pp_pkg path) ;
-           false, None)
-        else if ignore_tezos &&
-                (String.starts_with ~prefix:"tezos" pkg_name
-                 || String.starts_with ~prefix:"octez" pkg_name) then
-          false, None
-        else if S.is_empty pkgs || S.mem pkg_name pkgs || S.mem pkg_version pkgs then
-          let opam =
-            let opam_file =
-              OpamFile.make (OpamFilename.raw (Fpath.to_string path))
-            in
-            OpamFile.OPAM.read opam_file
+  let should_consider pkgs path =
+    if Fpath.filename path = "opam" && not (FS.mem path !moved_files) then
+      let name, version = pkg_name_and_version path in
+      if S.mem version ignored_pkgs || S.mem name ignored_pkgs then
+        (Logs.info (fun m -> m "ignoring %a (--ignore)" pp_pkg path) ;
+         None)
+      else if ignore_tezos &&
+              (String.starts_with ~prefix:"tezos" name
+               || String.starts_with ~prefix:"octez" name) then
+        None
+      else if S.is_empty pkgs || S.mem name pkgs || S.mem version pkgs then
+        let opam =
+          let opam_file =
+            OpamFile.make (OpamFilename.raw (Fpath.to_string path))
           in
-          match filter with
-          | `Unavailable _ | `Ocaml _ as f ->
-            opam_matches f opam, Some opam
-          | `Package ->
-            true, Some opam
-        else
-          false, None
+          OpamFile.OPAM.read opam_file
+        in
+        Some (version, opam)
       else
-        false, None
-    in
-    if move_it then begin
-      Logs.app (fun m -> m "%a will be moved"
-                   Fmt.(styled (`Fg `Red) pp_pkg) path);
-      moved_files := FS.add path !moved_files;
-      let opam = Option.get opam in
-      let* () =
-        move reason no_upper_bound archive opams git_commit dry_run include_diff opam path
-      in
-      Ok ()
-    end else
-      Ok ()
+        None
+    else
+      None
   in
-  let* r = Bos.OS.Dir.fold_contents foreach (Ok ()) pkg_dir in
-  if summary then begin
+  let explanations = Hashtbl.create 7 in
+  let foreach opams pkgs filter reason path acc =
+    let* () = acc in
+    let archive_it =
+      match should_consider pkgs path with
+      | None -> None
+      | Some (pkg_version, opam) ->
+        Logs.info (fun m -> m "dealing with %s" pkg_version);
+        match filter with
+        | `Unavailable _ | `Ocaml _ as f ->
+          if opam_matches f opam then Some opam else None
+        | `Package ->
+          Some opam
+        | `Installable ->
+          match is_installable (Lazy.force opams) opam with
+          | false, explanation ->
+            (match explanation with
+             | None -> ()
+             | Some (pkg, reason) -> Hashtbl.replace explanations pkg reason);
+            Some opam
+          | true, _ ->
+            None
+    in
+    match archive_it with
+    | None -> Ok ()
+    | Some opam ->
+      Logs.app (fun m -> m "archiving %a" Fmt.(styled (`Fg `Red) pp_pkg) path);
+      moved_files := FS.add path !moved_files;
+      if not include_diff && dry_run then
+        Ok ()
+      else
+        let* new_opam_content =
+          adapt_opam opams no_upper_bound git_commit reason path opam
+        in
+        let* () =
+          if include_diff then
+            output_opam_diff path new_opam_content
+          else
+            Ok ()
+        in
+        let* () =
+          if not dry_run then
+            move_opam archive path new_opam_content
+          else
+            Ok ()
+        in
+        Ok ()
+  in
+  let* r =
+    Bos.OS.Dir.fold_contents (foreach opams pkgs filter reason) (Ok ()) pkg_dir
+  in
+  (* if we're "later_installable", adjust the filter and reason *)
+  let filter, reason =
+    if later_installable then
+      `Installable, (fun _ -> Uninstallable)
+    else
+      filter, reason
+  in
+  (* fixpoint if packages and `Installable - needs to modify "opams" *)
+  let adjust_pkgs_opams pkgs opams =
+    (* update the available opam files in the OpamPackage.Set *)
+    let opams =
+      lazy
+        (FS.fold (fun pkg opams ->
+             let _, ver = pkg_name_and_version pkg in
+             OpamPackage.Set.remove (OpamPackage.of_string ver) opams)
+            !moved_files (Lazy.force opams))
+    (* update the pkgs *)
+    and pkgs =
+      FS.fold (fun p pkgs ->
+          let _, ver = pkg_name_and_version p in
+          S.remove ver pkgs)
+        !moved_files pkgs
+    in
+    (pkgs, opams)
+  in
+  let rec go r (pkgs, opams) =
+    match r with
+    | Error _ as e -> e
+    | Ok () ->
+      let old_count = FS.cardinal !moved_files in
+      let* r =
+        Bos.OS.Dir.fold_contents (foreach opams pkgs filter reason) (Ok ()) pkg_dir
+      in
+      let pkgs, opams = adjust_pkgs_opams pkgs opams in
+      (* if we made progress (removed some more), continue *)
+      if FS.cardinal !moved_files > old_count &&
+         (not (S.is_empty pkgs) || pkg_all)
+      then
+        go r (pkgs, opams)
+      else
+        r
+  in
+  let r =
+    if FS.is_empty !moved_files || filter <> `Installable then
+      Ok ()
+    else
+      go r (adjust_pkgs_opams pkgs opams)
+  in
+  (* we print a summary *)
+  if not no_summary then begin
     let h = Hashtbl.create 13 in
     FS.iter (fun path ->
-        let pkg_name, vers = pkg_name_and_version path in
-        let have = Option.value ~default:S.empty (Hashtbl.find_opt h pkg_name) in
-        Hashtbl.replace h pkg_name (S.add vers have))
+        let name, vers = pkg_name_and_version path in
+        let have = Option.value ~default:S.empty (Hashtbl.find_opt h name) in
+        Hashtbl.replace h name (S.add vers have))
       !moved_files;
     Logs.app (fun m -> m "Summary (%u unique packages, %u total opam files):"
                  (Hashtbl.length h) (FS.cardinal !moved_files));
@@ -465,8 +739,20 @@ let jump () unavailable avoid_version deprecated ocaml_lower_bound ignore_pkgs
         let vers_without_pkg v =
           String.sub v plen (String.length v - plen)
         in
+        let vers =
+          S.map vers_without_pkg vers
+          |> S.elements
+          |> List.sort OpamVersionCompare.compare
+        in
         Logs.app (fun m -> m "- %s: %a" pkg Fmt.(list ~sep:(any ", ") string)
-                     (S.elements (S.map vers_without_pkg vers))))
+                     vers));
+    if Hashtbl.length explanations > 0 then begin
+      Logs.app (fun m -> m "Reasoning:");
+      Hashtbl.fold (fun pkg r acc -> (pkg, r) :: acc) explanations []
+      |> List.sort (fun (a, _) (b, _) -> OpamVersionCompare.compare a b)
+      |> List.iter (fun (pkg_name, reason) ->
+          Logs.app (fun m -> m "- %S unsatisfied dependency: %s" pkg_name reason))
+    end;
   end;
   r
 
@@ -506,7 +792,8 @@ let ocaml_lower_bound =
 
 let ignore_pkgs =
   let doc = "Ignore this package" in
-  Arg.(value & opt_all string [ "arch-x86_32" ] & info ~doc ["ignore"])
+  let def = [ "arch-x86_32" ; "ocaml-option-spacetime" ; "conf-freeglut" ] in
+  Arg.(value & opt_all string def & info ~doc ["ignore"])
 
 let no_upper_bound =
   let doc = "Do not emit an upper bound for dependencies to this package" in
@@ -529,9 +816,9 @@ let include_diff =
   let doc = "Output the diffs on the console as well" in
   Arg.(value & flag & info ~doc ["include-diff"])
 
-let summary =
-  let doc = "Output a summary on the console" in
-  Arg.(value & flag & info ~doc ["summary"])
+let no_summary =
+  let doc = "Don't output a summary on the console" in
+  Arg.(value & flag & info ~doc ["no-summary"])
 
 let ignore_tezos =
   let doc = "Ignore tezos and octez packages" in
@@ -541,12 +828,34 @@ let pkg =
   let doc = "Archive this package (may be package name or package.version)" in
   Arg.(value & opt_all string [] & info ~doc ["pkg"])
 
+let pkg_all =
+  let doc = "Consider all packages" in
+  Arg.(value & flag & info ~doc ["pkg-all"])
+
+let pkg_file =
+  let doc = "Archive packages from the file (package name or package.version)" in
+  Arg.(value & opt (some file) None & info ~doc ["pkg-file"])
+
+let installable =
+  let doc =
+    "Check for installability of the provided packages \
+     (--pkg or --pkg-file or --pkg-all must be provided)."
+  in
+  Arg.(value & flag & info ~doc ["installable"])
+
 let reason =
   let doc =
     "Reason for archival (default is uninstallable). If ocaml-lower-bound is \
      provided, ocaml-version is used by default."
   in
   Arg.(value & opt (some (enum reason_enum)) None & info ~doc ["reason"])
+
+let later_installable =
+  let doc =
+    "Check after the initial run for installability of the provided packages \
+     (--pkg or --pkg-file or --pkg-all must be provided)."
+  in
+  Arg.(value & flag & info ~doc ["later-installable"])
 
 let cmd =
   let info = Cmd.info "archive-opam" ~version:"%%VERSION_NUM%%"
@@ -555,7 +864,8 @@ let cmd =
                        $ deprecated $ ocaml_lower_bound $ ignore_pkgs
                        $ no_upper_bound $ opam_repository
                        $ opam_repository_archive $ dry_run $ ignore_tezos $ pkg
-                       $ reason $ include_diff $ summary))
+                       $ reason $ include_diff $ no_summary $ installable
+                       $ pkg_file $ pkg_all $ later_installable))
   in
   Cmd.v info term
 
