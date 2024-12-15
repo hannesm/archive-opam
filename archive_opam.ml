@@ -104,9 +104,9 @@ let string_of_relop = OpamPrinter.FullPos.relop_kind
 
 let rec filter_to_string = function
   | OpamTypes.FBool b -> string_of_bool b
-  | FString s -> s
+  | FString s -> "\"" ^ s ^ "\""
   | FIdent (_opt_names, var, _env) ->
-    "ident " ^ OpamVariable.to_string var
+    OpamVariable.to_string var
   | FOp (f, rel, g) ->
     filter_to_string f ^ " " ^ string_of_relop rel ^ " " ^ filter_to_string g
   | FAnd (f, g) ->
@@ -118,7 +118,7 @@ let rec filter_to_string = function
   | FUndef f -> "undefined " ^ filter_to_string f
 
 let f_to_string = function
-  | OpamTypes.Filter filter -> "filter: " ^ filter_to_string filter
+  | OpamTypes.Filter filter -> filter_to_string filter
   | Constraint (relop, filter) ->
     string_of_relop relop ^ " " ^ filter_to_string filter
 
