@@ -122,6 +122,13 @@ let f_to_string = function
   | Constraint (relop, filter) ->
     string_of_relop relop ^ " " ^ filter_to_string filter
 
+let rec condition_to_string = function
+  | OpamTypes.Empty -> ""
+  | Atom f -> f_to_string f
+  | Block a -> condition_to_string a
+  | And (a, b) -> condition_to_string a ^ " & " ^ condition_to_string b
+  | Or (a, b) -> condition_to_string a ^ " | " ^ condition_to_string b
+
 let adapt_deps no_upper_bound opams opam =
   let current_deps = OpamFile.OPAM.depends opam in
   let rec locked_deps = function
