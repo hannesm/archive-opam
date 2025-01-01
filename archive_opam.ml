@@ -592,7 +592,7 @@ let jump () unavailable avoid_version deprecated ocaml_lower_bound ignore_pkgs
       let* data = Bos.OS.File.read (Fpath.v f) in
       let pkgs =
         String.split_on_char '\n' data |>
-        String.concat "" |>
+        String.concat " " |>
         String.split_on_char ' ' |>
         List.filter (fun s -> s <> "") |>
         S.of_list
