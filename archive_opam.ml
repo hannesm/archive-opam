@@ -569,13 +569,16 @@ let filter_and_reason ~avoid_version ~deprecated ~unavailable ~ocaml_lower_bound
 let jump () unavailable avoid_version deprecated ocaml_lower_bound ignore_pkgs
     no_upper_bound opam_repository archive dry_run ignore_tezos pkgs user_reason
     include_diff no_summary installable pkg_file pkg_all later_installable
-    iters =
+    iters commit =
   let ( let* ) = Result.bind in
   let pkg_dir = Fpath.(v opam_repository / "packages") in
   let* _ = Bos.OS.Dir.must_exist pkg_dir in
   let* git_commit =
-    let cmd = Bos.Cmd.(v "git" % "rev-parse" % "HEAD") in
-    Bos.OS.Cmd.(run_out cmd |> out_string ~trim:true |> success)
+    match commit with
+    | None ->
+      let cmd = Bos.Cmd.(v "git" % "rev-parse" % "HEAD") in
+      Bos.OS.Cmd.(run_out cmd |> out_string ~trim:true |> success)
+    | Some x -> Ok x
   in
   let* _ =
     if dry_run then
@@ -911,6 +914,13 @@ let iters =
   let doc = "How many iterations to do for installability" in
   Arg.(value & opt int Int.max_int & info ~doc ["iters"])
 
+let commit =
+  let doc = "Which git commit to use for \
+             x-opam-repository-commit-hash-at-time-of-archiving (defaults to \
+             `git rev-parse HEAD`)"
+  in
+  Arg.(value & opt (some string) None & info ~doc ["commit"])
+
 let cmd =
   let info = Cmd.info "archive-opam" ~version:"%%VERSION_NUM%%"
   and term =
@@ -919,7 +929,8 @@ let cmd =
                        $ no_upper_bound $ opam_repository
                        $ opam_repository_archive $ dry_run $ ignore_tezos $ pkg
                        $ reason $ include_diff $ no_summary $ installable
-                       $ pkg_file $ pkg_all $ later_installable $ iters))
+                       $ pkg_file $ pkg_all $ later_installable $ iters
+                       $ commit))
   in
   Cmd.v info term
 
