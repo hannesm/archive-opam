@@ -603,7 +603,7 @@ let jump () unavailable avoid_version deprecated ocaml_lower_bound ignore_pkgs
   in
   if later_installable && S.is_empty pkgs && not pkg_all then
     invalid_arg "--later-installable present, but no --pkg/--pkg-file/--pkg-all";
-  let opams =
+  let all_opams =
     lazy
       (OpamPackage.keys
          (OpamRepositoryState.load_opams_from_dir
@@ -699,7 +699,7 @@ let jump () unavailable avoid_version deprecated ocaml_lower_bound ignore_pkgs
         Ok ()
       else
         let* new_opam_content =
-          adapt_opam opams no_upper_bound git_commit reason path opam
+          adapt_opam all_opams no_upper_bound git_commit reason path opam
         in
         let* () =
           if include_diff then
@@ -716,7 +716,7 @@ let jump () unavailable avoid_version deprecated ocaml_lower_bound ignore_pkgs
         Ok ()
   in
   let* r =
-    Bos.OS.Dir.fold_contents (foreach opams pkgs filter reason) (Ok ()) pkg_dir
+    Bos.OS.Dir.fold_contents (foreach all_opams pkgs filter reason) (Ok ()) pkg_dir
   in
   (* if we're "later_installable", adjust the filter and reason *)
   let filter, reason =
@@ -768,7 +768,7 @@ let jump () unavailable avoid_version deprecated ocaml_lower_bound ignore_pkgs
     if FS.is_empty !moved_files || filter <> `Installable then
       Ok ()
     else
-      go r (adjust_pkgs_opams pkgs opams) iters 0
+      go r (adjust_pkgs_opams pkgs all_opams) iters 0
   in
   (* we print a summary *)
   if not no_summary then begin
