@@ -399,14 +399,14 @@ let is_installable opams opam =
       let rec matches_filter = function
         | OpamTypes.FBool b -> `Bool b
         | FString s ->
-          Logs.warn (fun m -> m "matches_filter: string %s" s);
+          Logs.info (fun m -> m "matches_filter: string %s" s);
           `Bool true
         | FIdent (_opt_names, var, _env) ->
           begin match OpamVariable.to_string var with
             | "dev" | "with-doc" | "with-test" | "with-dev-setup" -> `Always
             | "build" | "post" -> `Bool true
             | _ ->
-              Logs.warn (fun m -> m "matches_filter: ident %s" (OpamVariable.to_string var));
+              Logs.info (fun m -> m "matches_filter: ident %s" (OpamVariable.to_string var));
               `Bool true
           end
         | FOp (f, rel, g) ->
@@ -414,7 +414,7 @@ let is_installable opams opam =
             | FIdent (_, var, _) when OpamVariable.to_string var = "os" ->
               `Bool true
             | _ ->
-              Logs.warn (fun m -> m "matches_filter: %s %s %s" (filter_to_string f)
+              Logs.info (fun m -> m "matches_filter: %s %s %s" (filter_to_string f)
                             (string_of_relop rel) (filter_to_string g));
               `Bool true
           end
@@ -426,14 +426,14 @@ let is_installable opams opam =
           begin match matches_filter f with
             | `Bool b -> `Bool (not b)
             | `Always ->
-              Logs.warn (fun m -> m "matches_filter: not %s resulted in true" (filter_to_string f));
+              Logs.info (fun m -> m "matches_filter: not %s resulted in true" (filter_to_string f));
               `Bool true
           end
         | FDefined f ->
-          Logs.warn (fun m -> m "matches_filter: defined %s" (filter_to_string f));
+          Logs.info (fun m -> m "matches_filter: defined %s" (filter_to_string f));
           `Bool true
         | FUndef f ->
-          Logs.warn (fun m -> m "matches_filter: undefined %s" (filter_to_string f));
+          Logs.info (fun m -> m "matches_filter: undefined %s" (filter_to_string f));
           `Bool true
       in
       let rec matches_condition = function
@@ -457,7 +457,7 @@ let is_installable opams opam =
             in
             match v with
             | None ->
-              Logs.warn (fun m -> m "matches_condition: unexpected filter %s"
+              Logs.info (fun m -> m "matches_condition: unexpected filter %s"
                             (filter_to_string f));
               true
             | Some v ->
