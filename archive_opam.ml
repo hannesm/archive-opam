@@ -648,7 +648,21 @@ let jump () unavailable avoid_version deprecated ocaml_lower_bound ignore_pkgs
           in
           OpamFile.OPAM.read opam_file
         in
-        Some (version, opam)
+        (* check for x-maintained being true *)
+        let maintained =
+          match OpamFile.OPAM.extended opam "x-maintained" Fun.id with
+          | None -> false
+          | Some { pelem = Bool b ; _ } -> b
+          | Some v ->
+            Logs.warn (fun m -> m "%a x-maintained: expected a bool, got %s"
+                          pp_pkg path (OpamPrinter.FullPos.value v));
+            false
+        in
+        if maintained then
+          (Logs.info (fun m -> m "ignoring %a (x-maintained is true)" pp_pkg path);
+           None)
+        else
+          Some (version, opam)
       else
         None
     else
