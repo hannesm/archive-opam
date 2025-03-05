@@ -567,7 +567,7 @@ let filter_and_reason ~avoid_version ~deprecated ~unavailable ~ocaml_lower_bound
               or --ocaml bound allowed"
 
 let jump () unavailable avoid_version deprecated ocaml_lower_bound ignore_pkgs
-    no_upper_bound opam_repository archive dry_run ignore_tezos pkgs user_reason
+    no_upper_bound opam_repository archive dry_run pkgs user_reason
     include_diff no_summary installable pkg_file pkg_all later_installable
     iters commit =
   let ( let* ) = Result.bind in
@@ -641,10 +641,6 @@ let jump () unavailable avoid_version deprecated ocaml_lower_bound ignore_pkgs
       if S.mem version ignored_pkgs || S.mem name ignored_pkgs then
         (Logs.info (fun m -> m "ignoring %a (--ignore)" pp_pkg path) ;
          None)
-      else if ignore_tezos &&
-              (String.starts_with ~prefix:"tezos" name
-               || String.starts_with ~prefix:"octez" name) then
-        None
       else if S.is_empty pkgs || S.mem name pkgs || S.mem version pkgs then
         let opam =
           let opam_file =
@@ -873,10 +869,6 @@ let no_summary =
   let doc = "Don't output a summary on the console" in
   Arg.(value & flag & info ~doc ["no-summary"])
 
-let ignore_tezos =
-  let doc = "Ignore tezos and octez packages" in
-  Arg.(value & flag & info ~doc ["ignore-tezos"])
-
 let pkg =
   let doc = "Archive this package (may be package name or package.version)" in
   Arg.(value & opt_all string [] & info ~doc ["pkg"])
@@ -927,7 +919,7 @@ let cmd =
     Term.(term_result (const jump $ setup_log $ unavailable $ avoid_version
                        $ deprecated $ ocaml_lower_bound $ ignore_pkgs
                        $ no_upper_bound $ opam_repository
-                       $ opam_repository_archive $ dry_run $ ignore_tezos $ pkg
+                       $ opam_repository_archive $ dry_run $ pkg
                        $ reason $ include_diff $ no_summary $ installable
                        $ pkg_file $ pkg_all $ later_installable $ iters
                        $ commit))
