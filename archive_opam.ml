@@ -250,19 +250,12 @@ let move_opam archive opam_fpath data =
 
 let opam_matches filter opam =
   match filter with
-  | `Unavailable (unav, flags) ->
-    (* available: true *)
+  | `Unavailable ->
+    (* available: false *)
     let available =
-      if unav then
-        match OpamFile.OPAM.available opam with
-        | OpamTypes.FBool b -> b = false
-        | _ -> false
-      else
-        false
-    in
-    (* flags: avoid-version | deprecated *)
-    let avoid_flags =
-      List.exists (fun f -> List.mem f flags) (OpamFile.OPAM.flags opam)
+      match OpamFile.OPAM.available opam with
+      | OpamTypes.FBool b -> b = false
+      | _ -> false
     in
     let pkg_name, pkg_ver =
       OpamPackage.Name.to_string (OpamFile.OPAM.name opam),
@@ -271,12 +264,10 @@ let opam_matches filter opam =
     let reason =
       if available then
         Some (pkg_name, pkg_ver, "available: false")
-      else if avoid_flags then
-        Some (pkg_name, pkg_ver, "flags")
       else
         None
     in
-    available || avoid_flags, reason
+    available, reason
   | `Unmaintained ->
     let pkg_name, pkg_ver =
       OpamPackage.Name.to_string (OpamFile.OPAM.name opam),
@@ -518,41 +509,28 @@ let is_installable opams opam =
 
 module FS = Set.Make(Fpath)
 
-let filter_and_reason ~avoid_version ~deprecated ~unavailable ~unmaintained
-    ~ocaml_lower_bound ~installable ~pkg_all pkgs =
-  let flags =
-    (if avoid_version then
-       [ OpamTypes.Pkgflag_AvoidVersion ]
-     else []) @
-    (if deprecated then
-       [ OpamTypes.Pkgflag_Deprecated ]
-     else
-       [])
-  in
-  let unav = match unavailable, flags with
-    | false, [] -> None
-    | b, flags -> Some (b, flags)
-  in
+let filter_and_reason ~unavailable ~unmaintained ~ocaml_lower_bound ~installable
+    ~pkg_all pkgs =
   let err n =
     "only either --" ^ n ^ " or --installable can be provided"
   in
-  match unav, unmaintained, ocaml_lower_bound with
-  | Some x, false, None ->
+  match unavailable, unmaintained, ocaml_lower_bound with
+  | true, false, None ->
     if installable then
       invalid_arg (err "unavailable")
     else
-      `Unavailable x, Uninstallable
-  | None, true, None ->
+      `Unavailable, Uninstallable
+  | false, true, None ->
     if installable then
       invalid_arg (err "unmaintained")
     else
       `Unmaintained, Unmaintained
-  | None, false, Some v ->
+  | false, false, Some v ->
     if installable then
       invalid_arg (err "ocaml")
     else
       `Ocaml v, OCaml_version
-  | None, false, None ->
+  | false, false, None ->
     if S.is_empty pkgs && not pkg_all then
       invalid_arg "one of --unavailable, --unmaintained, --ocaml, \
                    --pkg/--pkg-file/--pkg-all must be specified"
@@ -561,10 +539,9 @@ let filter_and_reason ~avoid_version ~deprecated ~unavailable ~unmaintained
     else
       `Package, Uninstallable
   | _ ->
-    failwith "only one of --unavailable (--avoid-version / --deprecated), \
-              --unmaintained, or --ocaml bound allowed"
+    failwith "only one of --unavailable, --unmaintained, or --ocaml bound allowed"
 
-let jump () unavailable unmaintained avoid_version deprecated ocaml_lower_bound
+let jump () unavailable unmaintained ocaml_lower_bound
     ignore_pkgs no_upper_bound opam_repository archive dry_run pkgs user_reason
     include_diff no_summary installable pkg_file pkg_all later_installable
     iters commit =
@@ -616,8 +593,8 @@ let jump () unavailable unmaintained avoid_version deprecated ocaml_lower_bound
       (List.map OpamPackage.Name.of_string no_upper_bound)
   in
   let filter, default_reason =
-    filter_and_reason ~avoid_version ~deprecated ~unavailable ~unmaintained
-      ~ocaml_lower_bound ~installable ~pkg_all pkgs
+    filter_and_reason ~unavailable ~unmaintained ~ocaml_lower_bound ~installable
+      ~pkg_all pkgs
   in
   let reason = match user_reason with
     | None -> (fun _fpath -> default_reason)
@@ -670,7 +647,7 @@ let jump () unavailable unmaintained avoid_version deprecated ocaml_lower_bound
         Logs.info (fun m -> m "dealing with %s" pkg_version);
         let r, exp =
           match filter with
-          | `Unavailable _ | `Unmaintained | `Ocaml _ as f -> opam_matches f opam
+          | `Unavailable | `Unmaintained | `Ocaml _ as f -> opam_matches f opam
           | `Package ->
             let name, ver =
               let first_dot = String.index pkg_version '.' in
@@ -835,18 +812,6 @@ let unmaintained =
   in
   Arg.(value & flag & info ~doc ["unmaintained"])
 
-let avoid_version =
-  let doc =
-    "Filter packages where the field 'flags' contains 'avoid-version'"
-  in
-  Arg.(value & flag & info ~doc ["avoid-version"])
-
-let deprecated =
-  let doc =
-    "Filter packages where the field 'flags' contains 'deprecated'"
-  in
-  Arg.(value & flag & info ~doc ["deprecated"])
-
 let ocaml_lower_bound =
   let doc = "Filter packages depending on OCaml smaller than X" in
   Arg.(value & opt (some string) None & info ~doc ["ocaml-lower-bound"])
@@ -929,7 +894,7 @@ let cmd =
   let info = Cmd.info "archive-opam" ~version:"%%VERSION_NUM%%"
   and term =
     Term.(term_result (const jump $ setup_log $ unavailable $ unmaintained
-                       $ avoid_version $ deprecated $ ocaml_lower_bound
+                       $ ocaml_lower_bound
                        $ ignore_pkgs $ no_upper_bound $ opam_repository
                        $ opam_repository_archive $ dry_run $ pkg
                        $ reason $ include_diff $ no_summary $ installable
