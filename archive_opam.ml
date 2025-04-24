@@ -7,21 +7,18 @@ type reason =
   | Source_unavailable
   | Maintenance_intent
   | Uninstallable
-  | Unmaintained
 
 let reason_to_string = function
   | OCaml_version -> "ocaml-version"
   | Source_unavailable -> "source-unavailable"
   | Maintenance_intent -> "maintenance-intent"
   | Uninstallable -> "uninstallable"
-  | Unmaintained -> "unmaintained"
 
 let reason_of_string = function
   | "ocaml-version" -> Ok OCaml_version
   | "source-unavailable" -> Ok Source_unavailable
   | "maintenance-intent" -> Ok Maintenance_intent
   | "uninstallable" -> Ok Uninstallable
-  | "unmaintained" -> Ok Unmaintained
   | x -> Error (`Msg ("unknown reason: " ^ x))
 
 let reason_enum = [
@@ -29,7 +26,6 @@ let reason_enum = [
   "source-unavailable", Source_unavailable ;
   "maintenance-intent", Maintenance_intent ;
   "uninstallable", Uninstallable ;
-  "unmaintained", Unmaintained ;
 ]
 
 module S = Set.Make(String)
@@ -524,7 +520,7 @@ let filter_and_reason ~unavailable ~unmaintained ~ocaml_lower_bound ~installable
     if installable then
       invalid_arg (err "unmaintained")
     else
-      `Unmaintained, Unmaintained
+      `Unmaintained, Maintenance_intent
   | false, false, Some v ->
     if installable then
       invalid_arg (err "ocaml")
